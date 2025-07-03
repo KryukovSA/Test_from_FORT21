@@ -14,11 +14,34 @@ typedef struct {
     unsigned long user, nice, system, idle, iowait, irq, softirq, steal;
 } CPUStats;
 
+static int sockfd = -1;
+static struct sockaddr_in servaddr;
+
+void InitUdpSocket() {
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(1234);
+    servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+}
+
+void CleanupUdpSocket() {
+    if (sockfd != -1) {
+        close(sockfd);
+        sockfd = -1;
+    }
+}
+
 void ReadCpuStats(CPUStats *stats) {
     FILE *file = fopen("/proc/stat", "r");
     if (!file) {
         perror("Failed to open /proc/stat");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     char line[256];
@@ -31,9 +54,9 @@ void ReadCpuStats(CPUStats *stats) {
 
 float CalculateCpuUsage(const CPUStats *prev, const CPUStats *curr) {
     unsigned long prev_total = prev->user + prev->nice + prev->system + prev->idle +
-                               prev->iowait + prev->irq + prev->softirq + prev->steal;
+                             prev->iowait + prev->irq + prev->softirq + prev->steal;
     unsigned long curr_total = curr->user + curr->nice + curr->system + curr->idle +
-                               curr->iowait + curr->irq + curr->softirq + curr->steal;
+                             curr->iowait + curr->irq + curr->softirq + curr->steal;
 
     unsigned long total_diff = curr_total - prev_total;
     unsigned long idle_diff = curr->idle - prev->idle;
@@ -43,26 +66,20 @@ float CalculateCpuUsage(const CPUStats *prev, const CPUStats *curr) {
 }
 
 void SendUdpMessage(float usage) {
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("Socket creation failed");
+    if (sockfd == -1) {
+        fprintf(stderr, "Socket not initialized\n");
         return;
     }
-
-    struct sockaddr_in servaddr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(1234),
-        .sin_addr.s_addr = inet_addr("127.0.0.1")
-    };
 
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%.2f", usage);
     sendto(sockfd, buffer, strlen(buffer), 0,
-           (struct sockaddr *)&servaddr, sizeof(servaddr));
-    close(sockfd);
+          (struct sockaddr *)&servaddr, sizeof(servaddr));
 }
 
 int main() {
+    InitUdpSocket();
+    atexit(CleanupUdpSocket);
     CPUStats prev, curr;
     ReadCpuStats(&prev);
 
